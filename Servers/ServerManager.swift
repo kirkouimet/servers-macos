@@ -172,6 +172,67 @@ class ServerManager: ObservableObject {
         }
     }
 
+    /// Synchronously force-kill all server processes. Use when quitting app.
+    func forceStopAll() {
+        // Collect all ports first
+        var portsToKill: [Int] = []
+
+        for (_, state) in serverStates {
+            // Kill process group immediately
+            if state.pid > 0 {
+                kill(-state.pid, SIGKILL)
+            }
+            state.process?.terminate()
+
+            if let port = state.server.port {
+                portsToKill.append(port)
+            }
+
+            state.process = nil
+            state.pid = 0
+            state.status = .stopped
+        }
+
+        // Delay for SIGKILL to propagate
+        Thread.sleep(forTimeInterval: 0.5)
+
+        // Kill any remaining processes on ports using direct PIDs
+        for port in portsToKill {
+            killProcessesOnPort(port)
+        }
+
+        // Delay to ensure ports are released
+        Thread.sleep(forTimeInterval: 1.0)
+    }
+
+    private func killProcessesOnPort(_ port: Int) {
+        // Get PIDs using lsof synchronously
+        let pipe = Pipe()
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        task.arguments = ["-ti", ":\(port)"]
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+
+        do {
+            try task.run()
+            task.waitUntilExit()
+
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            if let output = String(data: data, encoding: .utf8) {
+                // Parse PIDs and kill each one directly
+                let pids = output.components(separatedBy: .newlines)
+                    .compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
+
+                for pid in pids {
+                    kill(pid, SIGKILL)
+                }
+            }
+        } catch {
+            // Ignore errors - no process on port is fine
+        }
+    }
+
     // MARK: - Log Access
 
     func getLogs(serverId: String, lines: Int = 100) -> [String] {

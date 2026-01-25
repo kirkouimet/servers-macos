@@ -60,7 +60,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         print("[Servers] Stopping all servers...")
 
         // Stop the API server
-        statusBarController?.serverAPI?.stop()
+        statusBarController?.serverApi?.stop()
 
         // Stop all managed dev servers (this kills the process groups)
         ServerManager.shared.stopAll()

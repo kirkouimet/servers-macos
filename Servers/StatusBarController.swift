@@ -10,7 +10,7 @@ class StatusBarController: ObservableObject {
 
     // Server management
     let serverManager = ServerManager.shared
-    var serverAPI: ServerApi?
+    var serverApi: ServerApi?
 
     // Menu items we need to update dynamically
     private var serverMenuItems: [String: NSMenuItem] = [:]
@@ -24,8 +24,8 @@ class StatusBarController: ObservableObject {
         setupMenu()
 
         // Start the API server
-        serverAPI = ServerApi(manager: serverManager, port: UInt16(serverManager.settings.resolvedApiPort))
-        serverAPI?.start()
+        serverApi = ServerApi(manager: serverManager, port: UInt16(serverManager.settings.resolvedApiPort))
+        serverApi?.start()
 
         // Auto-start servers with autoStart: true
         for server in serverManager.settings.servers where server.shouldAutoStart {
@@ -37,8 +37,8 @@ class StatusBarController: ObservableObject {
     }
 
     deinit {
-        serverAPI?.stop()
-        serverManager.stopAll()
+        serverApi?.stop()
+        serverManager.forceStopAll()
     }
 
     private func setupStatusBarButton() {
@@ -249,8 +249,10 @@ class StatusBarController: ObservableObject {
     }
 
     @objc func quitApp() {
-        serverManager.stopAll()
-        serverAPI?.stop()
+        serverManager.forceStopAll()
+        serverApi?.stop()
+        // Give processes time to fully terminate and release ports
+        Thread.sleep(forTimeInterval: 2.0)
         NSApp.terminate(nil)
     }
 }
