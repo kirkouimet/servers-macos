@@ -104,6 +104,15 @@ class StatusBarController: ObservableObject {
         statusItem.tag = 1  // Tag for finding later
         submenu.addItem(statusItem)
 
+        // URL row
+        if let port = server.port {
+            let scheme = server.useHttps ? "https" : "http"
+            let hostname = server.resolvedHostname
+            let urlItem = NSMenuItem(title: "\(scheme)://\(hostname):\(port)", action: nil, keyEquivalent: "")
+            urlItem.isEnabled = false
+            submenu.addItem(urlItem)
+        }
+
         submenu.addItem(NSMenuItem.separator())
 
         // Actions
@@ -131,10 +140,10 @@ class StatusBarController: ObservableObject {
         logsItem.representedObject = server.id
         submenu.addItem(logsItem)
 
-        if let port = server.port {
+        if server.port != nil {
             let openItem = NSMenuItem(title: "Open in Browser", action: #selector(openInBrowser(_:)), keyEquivalent: "")
             openItem.target = self
-            openItem.representedObject = port
+            openItem.representedObject = server.id
             submenu.addItem(openItem)
         }
 
@@ -220,8 +229,13 @@ class StatusBarController: ObservableObject {
     }
 
     @objc func openInBrowser(_ sender: NSMenuItem) {
-        guard let port = sender.representedObject as? Int else { return }
-        if let url = URL(string: "http://localhost:\(port)") {
+        guard let id = sender.representedObject as? String,
+              let serverState = serverManager.serverStates[id],
+              let port = serverState.server.port else { return }
+        let server = serverState.server
+        let scheme = server.useHttps ? "https" : "http"
+        let hostname = server.resolvedHostname
+        if let url = URL(string: "\(scheme)://\(hostname):\(port)") {
             NSWorkspace.shared.open(url)
         }
     }

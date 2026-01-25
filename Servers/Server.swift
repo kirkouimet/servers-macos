@@ -9,12 +9,17 @@ struct Server: Codable, Identifiable {
     let path: String
     let command: String
     let port: Int?
+    let hostname: String?
     let healthCheckPath: String?
     let https: Bool?
     let autoStart: Bool?
 
     var expandedPath: String {
         NSString(string: path).expandingTildeInPath
+    }
+
+    var resolvedHostname: String {
+        hostname ?? "localhost"
     }
 
     var useHttps: Bool {
@@ -25,12 +30,13 @@ struct Server: Codable, Identifiable {
         autoStart ?? false
     }
 
-    init(id: String, name: String, path: String, command: String, port: Int? = nil, healthCheckPath: String? = nil, https: Bool? = nil, autoStart: Bool? = nil) {
+    init(id: String, name: String, path: String, command: String, port: Int? = nil, hostname: String? = nil, healthCheckPath: String? = nil, https: Bool? = nil, autoStart: Bool? = nil) {
         self.id = id
         self.name = name
         self.path = path
         self.command = command
         self.port = port
+        self.hostname = hostname
         self.healthCheckPath = healthCheckPath ?? "/"
         self.https = https
         self.autoStart = autoStart
