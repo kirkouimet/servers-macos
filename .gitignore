@@ -1,0 +1,27 @@
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+xcuserdata/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Build artifacts
+/tmp/
+*.app
+*.dSYM
+
+# Generated icons (keep source PNGs)
+Icon/SfServerRack-Bold.png
+Icon/SfServerRack-Heavy.png
+Icon/SfServerRack-Black.png
+Icon/SfServerRack-Medium.png
+Icon/SfServerRack-Regular.png
+Icon/SfServerRack-Semibold.png
+Icon/SfServerRack.png
