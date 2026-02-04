@@ -5,17 +5,23 @@ class ServerManager: ObservableObject {
     static let shared = ServerManager()
 
     @Published var serverStates: [String: ServerState] = [:]
-    @Published var settings: ServerSettings
+    @Published var settings: ServerSettings?
+    @Published var configError: String?
 
     private var healthCheckTimers: [String: Timer] = [:]
     private let nodeEnvPath = "/Users/kirkouimet/.nvm/versions/node/v24.11.1/bin"
 
     init() {
-        self.settings = ServerSettings.load()
-        setupServers()
+        if let loaded = ServerSettings.load() {
+            self.settings = loaded
+            setupServers()
+        } else {
+            self.configError = "Failed to load ~/.servers/settings.json"
+        }
     }
 
     private func setupServers() {
+        guard let settings = settings else { return }
         for server in settings.servers {
             serverStates[server.id] = ServerState(server: server)
         }
@@ -28,9 +34,14 @@ class ServerManager: ObservableObject {
         }
 
         // Reload and setup
-        settings = ServerSettings.load()
-        serverStates.removeAll()
-        setupServers()
+        if let loaded = ServerSettings.load() {
+            settings = loaded
+            configError = nil
+            serverStates.removeAll()
+            setupServers()
+        } else {
+            configError = "Failed to load ~/.servers/settings.json"
+        }
     }
 
     // MARK: - Server Control
@@ -256,6 +267,7 @@ class ServerManager: ObservableObject {
     }
 
     func getAllServerInfo() -> [ServerInfo] {
+        guard let settings = settings else { return [] }
         return settings.servers.compactMap { getServerInfo(serverId: $0.id) }
     }
 
@@ -380,31 +392,46 @@ class ServerManager: ObservableObject {
 
     private func checkHealth(state: ServerState, port: Int) {
         // Use TCP socket check instead of HTTP to avoid polluting server logs
+        // Resolves hostname to support both IPv4 and IPv6
+        let hostname = state.server.hostname
+
         DispatchQueue.global(qos: .utility).async {
-            let socket = socket(AF_INET, SOCK_STREAM, 0)
-            guard socket >= 0 else {
+            var hints = addrinfo()
+            hints.ai_family = AF_UNSPEC  // Allow both IPv4 and IPv6
+            hints.ai_socktype = SOCK_STREAM
+
+            var result: UnsafeMutablePointer<addrinfo>?
+            let status = getaddrinfo(hostname, String(port), &hints, &result)
+
+            guard status == 0, let addrInfo = result else {
                 DispatchQueue.main.async { state.isHealthy = false }
                 return
             }
-            defer { close(socket) }
+            defer { freeaddrinfo(result) }
 
-            // Set socket timeout
-            var timeout = timeval(tv_sec: 2, tv_usec: 0)
-            setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+            // Try each resolved address until one connects
+            var info: UnsafeMutablePointer<addrinfo>? = addrInfo
+            var connected = false
 
-            var addr = sockaddr_in()
-            addr.sin_family = sa_family_t(AF_INET)
-            addr.sin_port = UInt16(port).bigEndian
-            addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+            while let ai = info {
+                let sock = socket(ai.pointee.ai_family, ai.pointee.ai_socktype, ai.pointee.ai_protocol)
+                if sock >= 0 {
+                    // Set socket timeout
+                    var timeout = timeval(tv_sec: 2, tv_usec: 0)
+                    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
 
-            let result = withUnsafePointer(to: &addr) { ptr in
-                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
-                    connect(socket, sockaddrPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
+                    if connect(sock, ai.pointee.ai_addr, ai.pointee.ai_addrlen) == 0 {
+                        connected = true
+                        close(sock)
+                        break
+                    }
+                    close(sock)
                 }
+                info = ai.pointee.ai_next
             }
 
             DispatchQueue.main.async {
-                state.isHealthy = (result == 0)
+                state.isHealthy = connected
             }
         }
     }

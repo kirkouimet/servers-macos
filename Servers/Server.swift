@@ -9,17 +9,13 @@ struct Server: Codable, Identifiable {
     let path: String
     let command: String
     let port: Int?
-    let hostname: String?
+    let hostname: String
     let healthCheckPath: String?
     let https: Bool?
     let autoStart: Bool?
 
     var expandedPath: String {
         NSString(string: path).expandingTildeInPath
-    }
-
-    var resolvedHostname: String {
-        hostname ?? "localhost"
     }
 
     var useHttps: Bool {
@@ -30,7 +26,7 @@ struct Server: Codable, Identifiable {
         autoStart ?? false
     }
 
-    init(id: String, name: String, path: String, command: String, port: Int? = nil, hostname: String? = nil, healthCheckPath: String? = nil, https: Bool? = nil, autoStart: Bool? = nil) {
+    init(id: String, name: String, path: String, command: String, port: Int? = nil, hostname: String, healthCheckPath: String? = nil, https: Bool? = nil, autoStart: Bool? = nil) {
         self.id = id
         self.name = name
         self.path = path
@@ -105,45 +101,20 @@ struct ServerSettings: Codable {
 
     static let defaultSettingsPath = "~/.servers/settings.json"
 
-    static func load() -> ServerSettings {
+    static func load() -> ServerSettings? {
         let path = NSString(string: defaultSettingsPath).expandingTildeInPath
 
-        if let data = FileManager.default.contents(atPath: path),
-           let config = try? JSONDecoder().decode(ServerSettings.self, from: data) {
-            return config
+        guard let data = FileManager.default.contents(atPath: path) else {
+            print("Error: No settings file found at \(path)")
+            return nil
         }
 
-        // Return default config if file doesn't exist
-        return ServerSettings.defaultConfig()
-    }
-
-    static func defaultConfig() -> ServerSettings {
-        return ServerSettings(
-            servers: [
-                Server(
-                    id: "amp-server",
-                    name: "Amp Server",
-                    path: "~/Projects/amp/server",
-                    command: "npx tsx server.ts",
-                    port: 2878
-                ),
-                Server(
-                    id: "www-connected-app",
-                    name: "Connected Web",
-                    path: "~/Projects/connected/www-connected-app",
-                    command: "pnpm dev",
-                    port: 2666
-                ),
-                Server(
-                    id: "www-phi-health",
-                    name: "Phi Web",
-                    path: "~/Projects/phi/www-phi-health",
-                    command: "pnpm dev",
-                    port: 3000
-                )
-            ],
-            apiPort: nil
-        )
+        do {
+            return try JSONDecoder().decode(ServerSettings.self, from: data)
+        } catch {
+            print("Error: Failed to parse settings file: \(error)")
+            return nil
+        }
     }
 
     func save() {

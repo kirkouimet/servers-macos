@@ -24,12 +24,14 @@ class StatusBarController: ObservableObject {
         setupMenu()
 
         // Start the API server
-        serverApi = ServerApi(manager: serverManager, port: UInt16(serverManager.settings.resolvedApiPort))
-        serverApi?.start()
+        if let settings = serverManager.settings {
+            serverApi = ServerApi(manager: serverManager, port: UInt16(settings.resolvedApiPort))
+            serverApi?.start()
 
-        // Auto-start servers with autoStart: true
-        for server in serverManager.settings.servers where server.shouldAutoStart {
-            serverManager.start(serverId: server.id)
+            // Auto-start servers with autoStart: true
+            for server in settings.servers where server.shouldAutoStart {
+                serverManager.start(serverId: server.id)
+            }
         }
 
         // Subscribe to server state changes
@@ -61,10 +63,16 @@ class StatusBarController: ObservableObject {
         menu.addItem(NSMenuItem.separator())
 
         // Server items - will be populated dynamically
-        for server in serverManager.settings.servers {
-            let item = createServerMenuItem(for: server)
-            serverMenuItems[server.id] = item
-            menu.addItem(item)
+        if let settings = serverManager.settings {
+            for server in settings.servers {
+                let item = createServerMenuItem(for: server)
+                serverMenuItems[server.id] = item
+                menu.addItem(item)
+            }
+        } else if let error = serverManager.configError {
+            let errorItem = NSMenuItem(title: "⚠️ \(error)", action: nil, keyEquivalent: "")
+            errorItem.isEnabled = false
+            menu.addItem(errorItem)
         }
 
         menu.addItem(NSMenuItem.separator())
@@ -107,7 +115,7 @@ class StatusBarController: ObservableObject {
         // URL row
         if let port = server.port {
             let scheme = server.useHttps ? "https" : "http"
-            let hostname = server.resolvedHostname
+            let hostname = server.hostname
             let urlItem = NSMenuItem(title: "\(scheme)://\(hostname):\(port)", action: nil, keyEquivalent: "")
             urlItem.isEnabled = false
             submenu.addItem(urlItem)
@@ -183,7 +191,7 @@ class StatusBarController: ObservableObject {
             indicator = "⏳"
         }
 
-        let server = serverManager.settings.servers.first { $0.id == id }
+        let server = serverManager.settings?.servers.first { $0.id == id }
         menuItem.title = "\(indicator) \(server?.name ?? id)"
 
         // Update status text in submenu
@@ -234,7 +242,7 @@ class StatusBarController: ObservableObject {
               let port = serverState.server.port else { return }
         let server = serverState.server
         let scheme = server.useHttps ? "https" : "http"
-        let hostname = server.resolvedHostname
+        let hostname = server.hostname
         if let url = URL(string: "\(scheme)://\(hostname):\(port)") {
             NSWorkspace.shared.open(url)
         }
