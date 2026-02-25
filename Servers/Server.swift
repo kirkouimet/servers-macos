@@ -60,6 +60,7 @@ class ServerState: ObservableObject {
     var process: Process?
     var pid: pid_t = 0
     @Published var logBuffer: [String] = []
+    @Published var logTimestamps: [Date] = []
     var crashTimes: [Date] = []
 
     let maxLogLines = 5000
@@ -74,8 +75,11 @@ class ServerState: ObservableObject {
 
     func appendLog(_ line: String) {
         logBuffer.append(line)
+        logTimestamps.append(Date())
         if logBuffer.count > maxLogLines {
-            logBuffer.removeFirst(logBuffer.count - maxLogLines)
+            let overflow = logBuffer.count - maxLogLines
+            logBuffer.removeFirst(overflow)
+            logTimestamps.removeFirst(overflow)
         }
     }
 
@@ -86,6 +90,7 @@ class ServerState: ObservableObject {
 
     func clearLogs() {
         logBuffer.removeAll()
+        logTimestamps.removeAll()
     }
 }
 

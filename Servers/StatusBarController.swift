@@ -13,7 +13,8 @@ class StatusBarController: ObservableObject {
     var serverApi: ServerApi?
 
     // Menu items we need to update dynamically
-    private var serverMenuItems: [String: NSMenuItem] = [:]
+    private var serverLabelItems: [String: NSMenuItem] = [:]
+    private var serverButtonItems: [String: NSMenuItem] = [:]
     private var launchAtLoginItem: NSMenuItem?
 
     init() {
@@ -54,39 +55,30 @@ class StatusBarController: ObservableObject {
 
     private func setupMenu() {
         // Header
-        let headerItem = NSMenuItem()
+        let headerMenuItem = NSMenuItem()
         let headerView = NSHostingView(rootView: MenuHeaderView())
         headerView.frame = NSRect(x: 0, y: 0, width: 280, height: 28)
-        headerItem.view = headerView
-        menu.addItem(headerItem)
+        headerMenuItem.view = headerView
+        menu.addItem(headerMenuItem)
 
         menu.addItem(NSMenuItem.separator())
 
-        // Server items - will be populated dynamically
+        // Server items — clickable label + button row per server
         if let settings = serverManager.settings {
             for server in settings.servers {
-                let item = createServerMenuItem(for: server)
-                serverMenuItems[server.id] = item
-                menu.addItem(item)
+                let (labelItem, buttonItem) = createServerMenuItems(for: server)
+                serverLabelItems[server.id] = labelItem
+                serverButtonItems[server.id] = buttonItem
+                menu.addItem(labelItem)
+                menu.addItem(buttonItem)
+                menu.addItem(NSMenuItem.separator())
             }
         } else if let error = serverManager.configError {
-            let errorItem = NSMenuItem(title: "⚠️ \(error)", action: nil, keyEquivalent: "")
+            let errorItem = NSMenuItem(title: "\(error)", action: nil, keyEquivalent: "")
             errorItem.isEnabled = false
             menu.addItem(errorItem)
+            menu.addItem(NSMenuItem.separator())
         }
-
-        menu.addItem(NSMenuItem.separator())
-
-        // Global actions
-        let startAllItem = NSMenuItem(title: "Start All Servers", action: #selector(startAllServers), keyEquivalent: "")
-        startAllItem.target = self
-        menu.addItem(startAllItem)
-
-        let stopAllItem = NSMenuItem(title: "Stop All Servers", action: #selector(stopAllServers), keyEquivalent: "")
-        stopAllItem.target = self
-        menu.addItem(stopAllItem)
-
-        menu.addItem(NSMenuItem.separator())
 
         // Settings
         let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
@@ -101,66 +93,53 @@ class StatusBarController: ObservableObject {
         menu.addItem(quitItem)
     }
 
-    private func createServerMenuItem(for server: Server) -> NSMenuItem {
-        let item = NSMenuItem(title: server.name, action: nil, keyEquivalent: "")
+    private func createServerMenuItems(for server: Server) -> (NSMenuItem, NSMenuItem) {
+        let state = serverManager.serverStates[server.id]
+        let status = state?.status ?? .stopped
 
-        let submenu = NSMenu()
+        // Row 1: Clickable label — opens control window
+        let labelItem = NSMenuItem()
+        let portSuffix = server.port != nil ? ":" + String(server.port!) : ""
+        let labelView = ServerLabelView(name: server.name, port: portSuffix, status: status)
+        let labelHosting = NSHostingView(rootView: labelView)
+        labelHosting.frame = NSRect(x: 0, y: 0, width: 280, height: 26)
+        labelItem.view = labelHosting
 
-        // Status row (will be updated dynamically)
-        let statusItem = NSMenuItem(title: "Status: Stopped", action: nil, keyEquivalent: "")
-        statusItem.isEnabled = false
-        statusItem.tag = 1  // Tag for finding later
-        submenu.addItem(statusItem)
+        // Make the whole label clickable via a gesture inside the SwiftUI view
+        // We'll use a tap gesture in ServerLabelView instead
+        let labelViewWithAction = ServerLabelView(name: server.name, port: portSuffix, status: status, onTap: { [weak self] in
+            self?.menu.cancelTracking()
+            LogWindowController.show(serverId: server.id, manager: self?.serverManager ?? ServerManager.shared)
+        })
+        let labelHostingFinal = NSHostingView(rootView: labelViewWithAction)
+        labelHostingFinal.frame = NSRect(x: 0, y: 0, width: 280, height: 26)
+        labelItem.view = labelHostingFinal
 
-        // URL row
-        if let port = server.port {
-            let scheme = server.useHttps ? "https" : "http"
-            let hostname = server.hostname
-            let urlItem = NSMenuItem(title: "\(scheme)://\(hostname):\(port)", action: nil, keyEquivalent: "")
-            urlItem.isEnabled = false
-            submenu.addItem(urlItem)
-        }
+        // Row 2: Buttons
+        let buttonItem = NSMenuItem()
+        let buttonsView = ServerControlButtons(
+            status: status,
+            onStart: { [weak self] in self?.serverManager.start(serverId: server.id) },
+            onStop: { [weak self] in self?.serverManager.stop(serverId: server.id) },
+            onRestart: { [weak self] in self?.serverManager.restart(serverId: server.id) },
+            onOpenBrowser: server.port != nil ? { [weak self] in
+                self?.menu.cancelTracking()
+                let scheme = server.useHttps ? "https" : "http"
+                let hostname = server.hostname
+                if let url = URL(string: "\(scheme)://\(hostname):\(server.port!)") {
+                    NSWorkspace.shared.open(url)
+                }
+            } : nil,
+        )
+        let wrappedButtons = buttonsView.padding(.horizontal, 14).padding(.vertical, 4).frame(width: 280, alignment: .leading)
+        let buttonHosting = NSHostingView(rootView: wrappedButtons)
+        buttonHosting.frame = NSRect(x: 0, y: 0, width: 280, height: 30)
+        buttonItem.view = buttonHosting
 
-        submenu.addItem(NSMenuItem.separator())
-
-        // Actions
-        let startItem = NSMenuItem(title: "Start", action: #selector(startServer(_:)), keyEquivalent: "")
-        startItem.target = self
-        startItem.representedObject = server.id
-        startItem.tag = 2
-        submenu.addItem(startItem)
-
-        let stopItem = NSMenuItem(title: "Stop", action: #selector(stopServer(_:)), keyEquivalent: "")
-        stopItem.target = self
-        stopItem.representedObject = server.id
-        stopItem.tag = 3
-        submenu.addItem(stopItem)
-
-        let restartItem = NSMenuItem(title: "Restart", action: #selector(restartServer(_:)), keyEquivalent: "")
-        restartItem.target = self
-        restartItem.representedObject = server.id
-        submenu.addItem(restartItem)
-
-        submenu.addItem(NSMenuItem.separator())
-
-        let logsItem = NSMenuItem(title: "View Logs...", action: #selector(viewLogs(_:)), keyEquivalent: "")
-        logsItem.target = self
-        logsItem.representedObject = server.id
-        submenu.addItem(logsItem)
-
-        if server.port != nil {
-            let openItem = NSMenuItem(title: "Open in Browser", action: #selector(openInBrowser(_:)), keyEquivalent: "")
-            openItem.target = self
-            openItem.representedObject = server.id
-            submenu.addItem(openItem)
-        }
-
-        item.submenu = submenu
-        return item
+        return (labelItem, buttonItem)
     }
 
     private func startObservingServers() {
-        // Observe each server state
         for (id, state) in serverManager.serverStates {
             state.$status
                 .combineLatest(state.$isHealthy)
@@ -173,88 +152,44 @@ class StatusBarController: ObservableObject {
     }
 
     private func updateServerMenuItem(id: String, status: ServerStatus, isHealthy: Bool) {
-        guard let menuItem = serverMenuItems[id],
-              let submenu = menuItem.submenu else { return }
+        guard let server = serverManager.settings?.servers.first(where: { $0.id == id }) else { return }
 
-        // Update the main item title with status indicator
-        let indicator: String
-        switch status {
-        case .running:
-            indicator = isHealthy ? "●" : "◐"
-        case .starting:
-            indicator = "◑"
-        case .stopped:
-            indicator = "○"
-        case .crashed:
-            indicator = "✕"
-        case .cooldown:
-            indicator = "⏳"
+        // Update label
+        if let labelItem = serverLabelItems[id] {
+            let portSuffix = server.port != nil ? ":" + String(server.port!) : ""
+            let labelView = ServerLabelView(name: server.name, port: portSuffix, status: status, onTap: { [weak self] in
+                self?.menu.cancelTracking()
+                LogWindowController.show(serverId: server.id, manager: self?.serverManager ?? ServerManager.shared)
+            })
+            let hosting = NSHostingView(rootView: labelView)
+            hosting.frame = NSRect(x: 0, y: 0, width: 280, height: 26)
+            labelItem.view = hosting
         }
 
-        let server = serverManager.settings?.servers.first { $0.id == id }
-        menuItem.title = "\(indicator) \(server?.name ?? id)"
-
-        // Update status text in submenu
-        if let statusItem = submenu.item(withTag: 1) {
-            var statusText = "Status: \(status.rawValue.capitalized)"
-            if status == .running && isHealthy {
-                statusText += " (healthy)"
-            } else if status == .running && !isHealthy {
-                statusText += " (unhealthy)"
-            }
-            statusItem.title = statusText
-        }
-
-        // Enable/disable start/stop based on current state
-        if let startItem = submenu.item(withTag: 2) {
-            startItem.isEnabled = status == .stopped || status == .crashed
-        }
-        if let stopItem = submenu.item(withTag: 3) {
-            stopItem.isEnabled = status == .running || status == .starting
+        // Update buttons
+        if let buttonItem = serverButtonItems[id] {
+            let buttonsView = ServerControlButtons(
+                status: status,
+                onStart: { [weak self] in self?.serverManager.start(serverId: server.id) },
+                onStop: { [weak self] in self?.serverManager.stop(serverId: server.id) },
+                onRestart: { [weak self] in self?.serverManager.restart(serverId: server.id) },
+                onOpenBrowser: server.port != nil ? { [weak self] in
+                    self?.menu.cancelTracking()
+                    let scheme = server.useHttps ? "https" : "http"
+                    let hostname = server.hostname
+                    if let url = URL(string: "\(scheme)://\(hostname):\(server.port!)") {
+                        NSWorkspace.shared.open(url)
+                    }
+                } : nil,
+                )
+            let wrappedButtons = buttonsView.padding(.horizontal, 14).padding(.vertical, 4).frame(width: 280, alignment: .leading)
+            let hosting = NSHostingView(rootView: wrappedButtons)
+            hosting.frame = NSRect(x: 0, y: 0, width: 280, height: 30)
+            buttonItem.view = hosting
         }
     }
 
     // MARK: - Actions
-
-    @objc func startServer(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String else { return }
-        serverManager.start(serverId: id)
-    }
-
-    @objc func stopServer(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String else { return }
-        serverManager.stop(serverId: id)
-    }
-
-    @objc func restartServer(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String else { return }
-        serverManager.restart(serverId: id)
-    }
-
-    @objc func viewLogs(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String else { return }
-        LogWindowController.show(serverId: id, manager: serverManager)
-    }
-
-    @objc func openInBrowser(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String,
-              let serverState = serverManager.serverStates[id],
-              let port = serverState.server.port else { return }
-        let server = serverState.server
-        let scheme = server.useHttps ? "https" : "http"
-        let hostname = server.hostname
-        if let url = URL(string: "\(scheme)://\(hostname):\(port)") {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
-    @objc func startAllServers() {
-        serverManager.startAll()
-    }
-
-    @objc func stopAllServers() {
-        serverManager.stopAll()
-    }
 
     @objc func toggleLaunchAtLogin() {
         do {
@@ -292,5 +227,169 @@ struct MenuHeaderView: View {
         .padding(.top, 6)
         .padding(.bottom, 2)
         .frame(width: 280)
+    }
+}
+
+// MARK: - Server Control Buttons (reused in menu and log window)
+
+struct ServerControlButtons: View {
+    let status: ServerStatus
+    let onStart: () -> Void
+    let onStop: () -> Void
+    let onRestart: () -> Void
+    var onOpenBrowser: (() -> Void)? = nil
+    var size: ActionButton.Size = .small
+
+    private var canStart: Bool {
+        status == .stopped || status == .crashed
+    }
+
+    private var canStop: Bool {
+        status == .running || status == .starting
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if canStart {
+                ActionButton(icon: "play.fill", color: .green, enabled: true, size: size, tooltip: "Start") {
+                    onStart()
+                }
+            } else {
+                ActionButton(icon: "stop.fill", color: .red, enabled: true, size: size, tooltip: "Stop") {
+                    onStop()
+                }
+            }
+
+            ActionButton(icon: "arrow.clockwise", color: .blue, enabled: canStop, size: size, tooltip: "Restart") {
+                onRestart()
+            }
+
+            if let onOpenBrowser = onOpenBrowser {
+                ActionButton(icon: "safari", color: .cyan, enabled: status == .running, size: size, tooltip: "Open in Browser") {
+                    onOpenBrowser()
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Server Label View (clickable row)
+
+struct ServerLabelView: View {
+    let name: String
+    let port: String
+    let status: ServerStatus
+    var onTap: (() -> Void)? = nil
+
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(name)
+                .font(.system(size: 13, weight: .medium))
+                .lineLimit(1)
+
+            Spacer()
+
+            if !port.isEmpty {
+                Text(port)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(status == .running ? .green : .secondary)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 4)
+        .frame(width: 280, height: 26)
+        .background(isHovered ? Color.primary.opacity(0.1) : Color.clear)
+        .contentShape(Rectangle())
+        .onHover { hovering in isHovered = hovering }
+        .onTapGesture { onTap?() }
+    }
+}
+
+// MARK: - Action Button
+
+struct ActionButton: View {
+    enum Size {
+        case small, medium
+
+        var iconSize: CGFloat {
+            switch self {
+            case .small: return 11
+            case .medium: return 13
+            }
+        }
+
+        var frameWidth: CGFloat {
+            switch self {
+            case .small: return 28
+            case .medium: return 32
+            }
+        }
+
+        var frameHeight: CGFloat {
+            switch self {
+            case .small: return 22
+            case .medium: return 26
+            }
+        }
+    }
+
+    let icon: String
+    let color: Color
+    let enabled: Bool
+    var size: Size = .small
+    var tooltip: String? = nil
+    let action: () -> Void
+
+    @State private var isHovered = false
+    @State private var isPressed = false
+
+    var body: some View {
+        Image(systemName: icon)
+            .font(.system(size: size.iconSize, weight: .medium))
+            .foregroundStyle(enabled ? (isHovered ? .white : color) : .gray.opacity(0.4))
+            .frame(width: size.frameWidth, height: size.frameHeight)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(backgroundColor)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(borderColor, lineWidth: 1)
+            )
+            .scaleEffect(isPressed ? 0.92 : 1.0)
+            .animation(.easeInOut(duration: 0.1), value: isPressed)
+            .animation(.easeInOut(duration: 0.15), value: isHovered)
+            .onHover { hovering in
+                if enabled { isHovered = hovering }
+            }
+            .onTapGesture {
+                guard enabled else { return }
+                isPressed = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    isPressed = false
+                    action()
+                }
+            }
+            .help(tooltip ?? "")
+    }
+
+    private var backgroundColor: Color {
+        guard enabled else { return .clear }
+        if isPressed {
+            return color.opacity(0.7)
+        } else if isHovered {
+            return color.opacity(0.6)
+        }
+        return color.opacity(0.1)
+    }
+
+    private var borderColor: Color {
+        guard enabled else { return .gray.opacity(0.15) }
+        if isHovered {
+            return color.opacity(0.8)
+        }
+        return color.opacity(0.25)
     }
 }
