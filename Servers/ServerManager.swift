@@ -1,6 +1,10 @@
 import Foundation
 import Combine
 
+extension Notification.Name {
+    static let serverSettingsDidChange = Notification.Name("serverSettingsDidChange")
+}
+
 class ServerManager: ObservableObject {
     static let shared = ServerManager()
 
@@ -28,20 +32,38 @@ class ServerManager: ObservableObject {
     }
 
     func reloadSettings() {
-        // Stop all servers first
-        for id in serverStates.keys {
-            stop(serverId: id)
+        guard let loaded = ServerSettings.load() else {
+            configError = "Failed to load ~/.servers/settings.json"
+            return
         }
 
-        // Reload and setup
-        if let loaded = ServerSettings.load() {
-            settings = loaded
-            configError = nil
-            serverStates.removeAll()
-            setupServers()
-        } else {
-            configError = "Failed to load ~/.servers/settings.json"
+        settings = loaded
+        configError = nil
+
+        // Find removed servers and stop them
+        let newIds = Set(loaded.servers.map { $0.id })
+        let oldIds = Set(serverStates.keys)
+        for removedId in oldIds.subtracting(newIds) {
+            stop(serverId: removedId)
+            serverStates.removeValue(forKey: removedId)
         }
+
+        // Add new servers
+        for server in loaded.servers where serverStates[server.id] == nil {
+            serverStates[server.id] = ServerState(server: server)
+        }
+
+        // Update existing server configs (preserve runtime state)
+        for server in loaded.servers {
+            if let existingState = serverStates[server.id] {
+                // Update the server config on the state
+                existingState.updateServer(server)
+            }
+        }
+
+        // Notify observers
+        objectWillChange.send()
+        NotificationCenter.default.post(name: .serverSettingsDidChange, object: nil)
     }
 
     // MARK: - Server Control

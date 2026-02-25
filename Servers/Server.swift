@@ -13,6 +13,7 @@ struct Server: Codable, Identifiable {
     let healthCheckPath: String?
     let https: Bool?
     let autoStart: Bool?
+    let visible: Bool?
 
     var expandedPath: String {
         NSString(string: path).expandingTildeInPath
@@ -26,7 +27,11 @@ struct Server: Codable, Identifiable {
         autoStart ?? false
     }
 
-    init(id: String, name: String, path: String, command: String, port: Int? = nil, hostname: String, healthCheckPath: String? = nil, https: Bool? = nil, autoStart: Bool? = nil) {
+    var isVisible: Bool {
+        visible ?? true
+    }
+
+    init(id: String, name: String, path: String, command: String, port: Int? = nil, hostname: String, healthCheckPath: String? = nil, https: Bool? = nil, autoStart: Bool? = nil, visible: Bool? = nil) {
         self.id = id
         self.name = name
         self.path = path
@@ -36,6 +41,7 @@ struct Server: Codable, Identifiable {
         self.healthCheckPath = healthCheckPath ?? "/"
         self.https = https
         self.autoStart = autoStart
+        self.visible = visible
     }
 }
 
@@ -52,7 +58,7 @@ enum ServerStatus: String, Codable {
 // MARK: - Server State (Runtime)
 
 class ServerState: ObservableObject {
-    let server: Server
+    private(set) var server: Server
     @Published var status: ServerStatus = .stopped
     @Published var isHealthy: Bool = false
     @Published var lastError: String?
@@ -71,6 +77,11 @@ class ServerState: ObservableObject {
 
     init(server: Server) {
         self.server = server
+    }
+
+    func updateServer(_ newServer: Server) {
+        self.server = newServer
+        objectWillChange.send()
     }
 
     func appendLog(_ line: String) {
@@ -97,8 +108,8 @@ class ServerState: ObservableObject {
 // MARK: - Config
 
 struct ServerSettings: Codable {
-    let servers: [Server]
-    let apiPort: Int?
+    var servers: [Server]
+    var apiPort: Int?
 
     var resolvedApiPort: Int {
         apiPort ?? 7378
@@ -128,7 +139,9 @@ struct ServerSettings: Codable {
 
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
 
-        if let data = try? JSONEncoder().encode(self) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(self) {
             try? data.write(to: URL(fileURLWithPath: path))
         }
     }

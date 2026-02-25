@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
 import Combine
-import ServiceManagement
 
 class StatusBarController: ObservableObject {
     private var statusItem: NSStatusItem
@@ -15,7 +14,7 @@ class StatusBarController: ObservableObject {
     // Menu items we need to update dynamically
     private var serverLabelItems: [String: NSMenuItem] = [:]
     private var serverButtonItems: [String: NSMenuItem] = [:]
-    private var launchAtLoginItem: NSMenuItem?
+    private var settingsObserver: NSObjectProtocol?
 
     init() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -37,6 +36,13 @@ class StatusBarController: ObservableObject {
 
         // Subscribe to server state changes
         startObservingServers()
+
+        // Subscribe to settings changes to rebuild menu
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: .serverSettingsDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.rebuildMenu()
+        }
     }
 
     deinit {
@@ -54,6 +60,10 @@ class StatusBarController: ObservableObject {
     }
 
     private func setupMenu() {
+        buildMenuItems()
+    }
+
+    private func buildMenuItems() {
         // Header
         let headerMenuItem = NSMenuItem()
         let headerView = NSHostingView(rootView: MenuHeaderView())
@@ -63,9 +73,10 @@ class StatusBarController: ObservableObject {
 
         menu.addItem(NSMenuItem.separator())
 
-        // Server items — clickable label + button row per server
+        // Server items — only visible servers
         if let settings = serverManager.settings {
-            for server in settings.servers {
+            let visibleServers = settings.servers.filter { $0.isVisible }
+            for server in visibleServers {
                 let (labelItem, buttonItem) = createServerMenuItems(for: server)
                 serverLabelItems[server.id] = labelItem
                 serverButtonItems[server.id] = buttonItem
@@ -81,16 +92,23 @@ class StatusBarController: ObservableObject {
         }
 
         // Settings
-        let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
-        launchItem.target = self
-        launchItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        self.launchAtLoginItem = launchItem
-        menu.addItem(launchItem)
+        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
 
         // Quit
         let quitItem = NSMenuItem(title: "Quit Servers", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
+    }
+
+    private func rebuildMenu() {
+        menu.removeAllItems()
+        serverLabelItems.removeAll()
+        serverButtonItems.removeAll()
+        cancellables.removeAll()
+        buildMenuItems()
+        startObservingServers()
     }
 
     private func createServerMenuItems(for server: Server) -> (NSMenuItem, NSMenuItem) {
@@ -117,6 +135,7 @@ class StatusBarController: ObservableObject {
 
         // Row 2: Buttons
         let buttonItem = NSMenuItem()
+        let apiPort = serverManager.settings?.resolvedApiPort ?? 7378
         let buttonsView = ServerControlButtons(
             status: status,
             onStart: { [weak self] in self?.serverManager.start(serverId: server.id) },
@@ -130,6 +149,9 @@ class StatusBarController: ObservableObject {
                     NSWorkspace.shared.open(url)
                 }
             } : nil,
+            onCopyInstructions: {
+                ServerInstructions.copyToClipboard(for: server, apiPort: apiPort)
+            }
         )
         let wrappedButtons = buttonsView.padding(.horizontal, 14).padding(.vertical, 4).frame(width: 280, alignment: .leading)
         let buttonHosting = NSHostingView(rootView: wrappedButtons)
@@ -168,6 +190,7 @@ class StatusBarController: ObservableObject {
 
         // Update buttons
         if let buttonItem = serverButtonItems[id] {
+            let apiPort = serverManager.settings?.resolvedApiPort ?? 7378
             let buttonsView = ServerControlButtons(
                 status: status,
                 onStart: { [weak self] in self?.serverManager.start(serverId: server.id) },
@@ -181,7 +204,10 @@ class StatusBarController: ObservableObject {
                         NSWorkspace.shared.open(url)
                     }
                 } : nil,
-                )
+                onCopyInstructions: {
+                    ServerInstructions.copyToClipboard(for: server, apiPort: apiPort)
+                }
+            )
             let wrappedButtons = buttonsView.padding(.horizontal, 14).padding(.vertical, 4).frame(width: 280, alignment: .leading)
             let hosting = NSHostingView(rootView: wrappedButtons)
             hosting.frame = NSRect(x: 0, y: 0, width: 280, height: 30)
@@ -191,18 +217,8 @@ class StatusBarController: ObservableObject {
 
     // MARK: - Actions
 
-    @objc func toggleLaunchAtLogin() {
-        do {
-            if SMAppService.mainApp.status == .enabled {
-                try SMAppService.mainApp.unregister()
-                launchAtLoginItem?.state = .off
-            } else {
-                try SMAppService.mainApp.register()
-                launchAtLoginItem?.state = .on
-            }
-        } catch {
-            print("Failed to toggle launch at login: \(error)")
-        }
+    @objc func openSettings() {
+        SettingsWindowController.show()
     }
 
     @objc func quitApp() {
@@ -230,6 +246,47 @@ struct MenuHeaderView: View {
     }
 }
 
+// MARK: - Server Instructions Generator
+
+enum ServerInstructions {
+    static func markdown(for server: Server, apiPort: Int = 7378) -> String {
+        let scheme = server.useHttps ? "https" : "http"
+        let portStr = server.port != nil ? ":\(server.port!)" : ""
+        let url = server.port != nil ? "\(scheme)://\(server.hostname)\(portStr)" : nil
+        let base = "http://localhost:\(apiPort)"
+        let s = "\(base)/servers/\(server.id)"
+
+        var md = "# \(server.name)\n\n"
+        md += "Managed by **Servers.app**, a macOS menubar app for local dev servers. "
+        md += "All servers can be controlled via a REST API on port \(apiPort).\n\n"
+
+        if let url = url {
+            md += "**URL:** \(url)\n"
+        }
+        md += "**Path:** `\(server.path)`\n"
+
+        md += """
+
+        ```bash
+        curl \(s)                  # status
+        curl \(s)/logs?lines=200   # logs
+        curl -X POST \(s)/start    # start
+        curl -X POST \(s)/stop     # stop
+        curl -X POST \(s)/restart  # restart
+        curl \(base)/servers              # all servers
+        ```
+        """
+
+        return md
+    }
+
+    static func copyToClipboard(for server: Server, apiPort: Int = 7378) {
+        let md = markdown(for: server, apiPort: apiPort)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(md, forType: .string)
+    }
+}
+
 // MARK: - Server Control Buttons (reused in menu and log window)
 
 struct ServerControlButtons: View {
@@ -238,7 +295,10 @@ struct ServerControlButtons: View {
     let onStop: () -> Void
     let onRestart: () -> Void
     var onOpenBrowser: (() -> Void)? = nil
+    var onCopyInstructions: (() -> Void)? = nil
     var size: ActionButton.Size = .small
+
+    @State private var showCopied = false
 
     private var canStart: Bool {
         status == .stopped || status == .crashed
@@ -262,6 +322,22 @@ struct ServerControlButtons: View {
 
             ActionButton(icon: "arrow.clockwise", color: .blue, enabled: canStop, size: size, tooltip: "Restart") {
                 onRestart()
+            }
+
+            if let onCopyInstructions = onCopyInstructions {
+                ActionButton(
+                    icon: showCopied ? "checkmark" : "text.book.closed",
+                    color: showCopied ? .green : .purple,
+                    enabled: true,
+                    size: size,
+                    tooltip: "Copy Instructions"
+                ) {
+                    onCopyInstructions()
+                    showCopied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        showCopied = false
+                    }
+                }
             }
 
             if let onOpenBrowser = onOpenBrowser {
@@ -387,6 +463,69 @@ struct ActionButton: View {
 
     private var borderColor: Color {
         guard enabled else { return .gray.opacity(0.15) }
+        if isHovered {
+            return color.opacity(0.8)
+        }
+        return color.opacity(0.25)
+    }
+}
+
+// MARK: - Labeled Action Button (icon + text, same style as ActionButton)
+
+struct LabeledActionButton: View {
+    let icon: String
+    let label: String
+    let color: Color
+    var tooltip: String? = nil
+    let action: () -> Void
+
+    @State private var isHovered = false
+    @State private var isPressed = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .medium))
+            Text(label)
+                .font(.system(size: 11, design: .monospaced))
+                .lineLimit(1)
+        }
+        .foregroundStyle(isHovered ? .white : color)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .frame(height: 22)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(backgroundColor)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 5)
+                .strokeBorder(borderColor, lineWidth: 1)
+        )
+        .scaleEffect(isPressed ? 0.97 : 1.0)
+        .animation(.easeInOut(duration: 0.1), value: isPressed)
+        .animation(.easeInOut(duration: 0.15), value: isHovered)
+        .onHover { isHovered = $0 }
+        .onTapGesture {
+            isPressed = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                isPressed = false
+                action()
+            }
+        }
+        .help(tooltip ?? "")
+    }
+
+    private var backgroundColor: Color {
+        if isPressed {
+            return color.opacity(0.7)
+        } else if isHovered {
+            return color.opacity(0.6)
+        }
+        return color.opacity(0.1)
+    }
+
+    private var borderColor: Color {
         if isHovered {
             return color.opacity(0.8)
         }

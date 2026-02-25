@@ -7,7 +7,7 @@ struct ServersApp: App {
 
     var body: some Scene {
         Settings {
-            SettingsView()
+            PlaceholderSettingsView()
         }
     }
 }
@@ -72,15 +72,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-struct SettingsView: View {
+struct PlaceholderSettingsView: View {
     var body: some View {
-        Form {
-            Text("Servers Settings")
-                .font(.headline)
-            Text("Coming soon...")
-                .foregroundColor(.secondary)
-        }
-        .padding()
-        .frame(width: 300, height: 200)
+        Text("Use Settings from the menubar.")
+            .padding()
+            .frame(width: 300, height: 100)
     }
 }

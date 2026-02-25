@@ -159,12 +159,16 @@ class LogWindowController {
             }
         } : nil
 
+        let apiPort = manager.settings?.resolvedApiPort ?? 7378
         let logView = LogView(
             serverState: state,
             onStart: { manager.start(serverId: serverId) },
             onStop: { manager.stop(serverId: serverId) },
             onRestart: { manager.restart(serverId: serverId) },
-            onOpenBrowser: openBrowser
+            onOpenBrowser: openBrowser,
+            onCopyInstructions: {
+                ServerInstructions.copyToClipboard(for: server, apiPort: apiPort)
+            }
         )
         let hostingController = NSHostingController(rootView: logView)
 
@@ -223,7 +227,7 @@ class LogWindowController {
     }
 
     static func updateDockIconVisibility() {
-        if windows.isEmpty {
+        if windows.isEmpty && !SettingsWindowController.isOpen {
             NSApp.setActivationPolicy(.accessory)
         } else {
             NSApp.setActivationPolicy(.regular)
@@ -263,6 +267,7 @@ struct LogView: View {
     let onStop: () -> Void
     let onRestart: () -> Void
     var onOpenBrowser: (() -> Void)? = nil
+    var onCopyInstructions: (() -> Void)? = nil
     @State private var autoScroll = true
     @State private var searchText = ""
     @State private var showTimestamps = false
@@ -278,6 +283,7 @@ struct LogView: View {
                     onStop: onStop,
                     onRestart: onRestart,
                     onOpenBrowser: onOpenBrowser,
+                    onCopyInstructions: onCopyInstructions,
                     size: .medium
                 )
 
