@@ -88,7 +88,7 @@ AppDelegate catches SIGTERM and SIGINT for graceful shutdown. All child processe
 
 ## Node.js Path
 
-Hardcoded to NVM: `/Users/kirkouimet/.nvm/versions/node/v24.11.1/bin`
+Resolved at runtime in `ServerManager.swift`. Priority: NVM (latest installed version) → Homebrew (`/opt/homebrew/bin`, `/usr/local/bin`) → system fallback.
 
 ## Permissions
 

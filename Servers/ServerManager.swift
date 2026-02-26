@@ -13,7 +13,23 @@ class ServerManager: ObservableObject {
     @Published var configError: String?
 
     private var healthCheckTimers: [String: Timer] = [:]
-    private let nodeEnvPath = "/Users/kirkouimet/.nvm/versions/node/v24.11.1/bin"
+    private var nodeEnvPath: String {
+        // Check NVM default location
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let nvmDir = "\(home)/.nvm/versions/node"
+        if let versions = try? FileManager.default.contentsOfDirectory(atPath: nvmDir),
+           let latest = versions.filter({ $0.hasPrefix("v") }).sorted().last {
+            return "\(nvmDir)/\(latest)/bin"
+        }
+        // Homebrew node (Apple Silicon and Intel)
+        for path in ["/opt/homebrew/bin", "/usr/local/bin"] {
+            if FileManager.default.fileExists(atPath: "\(path)/node") {
+                return path
+            }
+        }
+        // Fall back to standard system paths
+        return "/usr/local/bin:/usr/bin"
+    }
 
     init() {
         if let loaded = ServerSettings.load() {

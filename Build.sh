@@ -4,7 +4,7 @@
 
 set -e
 
-PROJECT_DIR="/Users/kirkouimet/Projects/servers-macos"
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_NAME="Servers"
 BUILD_DIR="/tmp/ServersBuild"
 
