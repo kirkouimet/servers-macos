@@ -66,7 +66,7 @@ class StatusBarController: ObservableObject {
     private func buildMenuItems() {
         // Header
         let headerMenuItem = NSMenuItem()
-        let headerView = NSHostingView(rootView: MenuHeaderView())
+        let headerView = NSHostingView(rootView: MenuHeaderView(serverManager: serverManager))
         headerView.frame = NSRect(x: 0, y: 0, width: 280, height: 28)
         headerMenuItem.view = headerView
         menu.addItem(headerMenuItem)
@@ -125,7 +125,8 @@ class StatusBarController: ObservableObject {
 
         // Make the whole label clickable via a gesture inside the SwiftUI view
         // We'll use a tap gesture in ServerLabelView instead
-        let labelViewWithAction = ServerLabelView(name: server.name, port: portSuffix, status: status, onTap: { [weak self] in
+        let cpuUsage = state?.cpuUsage
+        let labelViewWithAction = ServerLabelView(name: server.name, port: portSuffix, status: status, cpuUsage: cpuUsage, onTap: { [weak self] in
             self?.menu.cancelTracking()
             LogWindowController.show(serverId: server.id, manager: self?.serverManager ?? ServerManager.shared)
         })
@@ -164,9 +165,9 @@ class StatusBarController: ObservableObject {
     private func startObservingServers() {
         for (id, state) in serverManager.serverStates {
             state.$status
-                .combineLatest(state.$isHealthy)
+                .combineLatest(state.$isHealthy, state.$cpuUsage)
                 .receive(on: DispatchQueue.main)
-                .sink { [weak self] status, isHealthy in
+                .sink { [weak self] status, isHealthy, _ in
                     self?.updateServerMenuItem(id: id, status: status, isHealthy: isHealthy)
                 }
                 .store(in: &cancellables)
@@ -175,11 +176,12 @@ class StatusBarController: ObservableObject {
 
     private func updateServerMenuItem(id: String, status: ServerStatus, isHealthy: Bool) {
         guard let server = serverManager.settings?.servers.first(where: { $0.id == id }) else { return }
+        let cpuUsage = serverManager.serverStates[id]?.cpuUsage
 
         // Update label
         if let labelItem = serverLabelItems[id] {
             let portSuffix = server.port != nil ? ":" + String(server.port!) : ""
-            let labelView = ServerLabelView(name: server.name, port: portSuffix, status: status, onTap: { [weak self] in
+            let labelView = ServerLabelView(name: server.name, port: portSuffix, status: status, cpuUsage: cpuUsage, onTap: { [weak self] in
                 self?.menu.cancelTracking()
                 LogWindowController.show(serverId: server.id, manager: self?.serverManager ?? ServerManager.shared)
             })
@@ -233,11 +235,24 @@ class StatusBarController: ObservableObject {
 // MARK: - Menu Header View
 
 struct MenuHeaderView: View {
+    @ObservedObject var serverManager: ServerManager
+
     var body: some View {
         HStack {
             Text("Servers")
                 .font(.system(size: 13, weight: .bold))
             Spacer()
+            let cpu = serverManager.appCpuUsage
+            if cpu > 50 {
+                HStack(spacing: 2) {
+                    Text("App")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                    Text(String(format: "%.0f%%", cpu))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(cpu > 100 ? .red : .orange)
+                }
+            }
         }
         .padding(.horizontal, 14)
         .padding(.top, 6)
@@ -355,6 +370,7 @@ struct ServerLabelView: View {
     let name: String
     let port: String
     let status: ServerStatus
+    var cpuUsage: Double? = nil
     var onTap: (() -> Void)? = nil
 
     @State private var isHovered = false
@@ -364,6 +380,12 @@ struct ServerLabelView: View {
             Text(name)
                 .font(.system(size: 13, weight: .medium))
                 .lineLimit(1)
+
+            if let cpu = cpuUsage, status == .running, cpu > 50 {
+                Text(formatCpu(cpu))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(cpuColor(cpu))
+            }
 
             Spacer()
 
@@ -380,6 +402,19 @@ struct ServerLabelView: View {
         .contentShape(Rectangle())
         .onHover { hovering in isHovered = hovering }
         .onTapGesture { onTap?() }
+    }
+
+    private func formatCpu(_ cpu: Double) -> String {
+        if cpu < 10 {
+            return String(format: "%.1f%%", cpu)
+        }
+        return String(format: "%.0f%%", cpu)
+    }
+
+    private func cpuColor(_ cpu: Double) -> Color {
+        if cpu > 100 { return .red }
+        if cpu > 50 { return .orange }
+        return .secondary
     }
 }
 

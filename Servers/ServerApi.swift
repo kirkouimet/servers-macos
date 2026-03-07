@@ -87,6 +87,14 @@ class ServerApi {
         // Route the request
         switch (method, path) {
 
+        // GET /stats - CPU usage for all servers and the app
+        case ("GET", "/stats"):
+            let stats = StatsResponse(
+                app: AppStats(cpuUsage: manager.appCpuUsage, pid: Int(ProcessInfo.processInfo.processIdentifier)),
+                servers: manager.getAllServerInfo()
+            )
+            sendResponse(connection: connection, status: 200, body: stats)
+
         // GET /servers - List all servers
         case ("GET", "/servers"):
             let servers = manager.getAllServerInfo()

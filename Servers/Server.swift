@@ -65,6 +65,7 @@ class ServerState: ObservableObject {
 
     var process: Process?
     var pid: pid_t = 0
+    @Published var cpuUsage: Double = 0  // Total CPU % for process tree
     @Published var logBuffer: [String] = []
     @Published var logTimestamps: [Date] = []
     var crashTimes: [Date] = []
@@ -160,6 +161,7 @@ struct ServerInfo: Codable {
     let isHealthy: Bool
     let port: Int?
     let lastError: String?
+    let cpuUsage: Double?
 }
 
 struct LogsResponse: Codable {
@@ -171,4 +173,14 @@ struct LogsResponse: Codable {
 struct ActionResponse: Codable {
     let success: Bool
     let message: String
+}
+
+struct AppStats: Codable {
+    let cpuUsage: Double
+    let pid: Int
+}
+
+struct StatsResponse: Codable {
+    let app: AppStats
+    let servers: [ServerInfo]
 }

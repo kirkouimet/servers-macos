@@ -11,8 +11,10 @@ class ServerManager: ObservableObject {
     @Published var serverStates: [String: ServerState] = [:]
     @Published var settings: ServerSettings?
     @Published var configError: String?
+    @Published var appCpuUsage: Double = 0
 
     private var healthCheckTimers: [String: Timer] = [:]
+    private var cpuMonitorTimer: Timer?
     private var nodeEnvPath: String {
         // Check NVM default location
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -38,12 +40,144 @@ class ServerManager: ObservableObject {
         } else {
             self.configError = "Failed to load ~/.servers/settings.json"
         }
+        startCpuMonitor()
     }
 
     private func setupServers() {
         guard let settings = settings else { return }
         for server in settings.servers {
             serverStates[server.id] = ServerState(server: server)
+        }
+    }
+
+    // MARK: - CPU Monitoring
+
+    private func startCpuMonitor() {
+        cpuMonitorTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+            self?.sampleCpuUsage()
+        }
+    }
+
+    private func sampleCpuUsage() {
+        // Collect all PIDs we care about (running servers + self)
+        var pidToServerId: [pid_t: String] = [:]
+        for (id, state) in serverStates where state.pid > 0 && state.status == .running {
+            pidToServerId[state.pid] = id
+        }
+
+        guard !pidToServerId.isEmpty else {
+            // Still sample app CPU even with no servers running
+            sampleAppCpu()
+            return
+        }
+
+        // Use ps to get CPU for all processes, then sum by process tree
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else { return }
+
+            // Get all processes with pid, ppid, %cpu
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/ps")
+            task.arguments = ["-eo", "pid,ppid,%cpu"]
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = FileHandle.nullDevice
+
+            do {
+                try task.run()
+                task.waitUntilExit()
+            } catch {
+                return
+            }
+
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            guard let output = String(data: data, encoding: .utf8) else { return }
+
+            // Parse ps output into (pid, ppid, cpu) tuples
+            struct PsEntry {
+                let pid: pid_t
+                let ppid: pid_t
+                let cpu: Double
+            }
+
+            var entries: [PsEntry] = []
+            let appPid = ProcessInfo.processInfo.processIdentifier
+
+            for line in output.components(separatedBy: "\n").dropFirst() {
+                let parts = line.trimmingCharacters(in: .whitespaces)
+                    .components(separatedBy: .whitespaces)
+                    .filter { !$0.isEmpty }
+                guard parts.count >= 3,
+                      let pid = Int32(parts[0]),
+                      let ppid = Int32(parts[1]),
+                      let cpu = Double(parts[2]) else { continue }
+                entries.append(PsEntry(pid: pid, ppid: ppid, cpu: cpu))
+            }
+
+            // Build parent -> children map
+            var childrenOf: [pid_t: [pid_t]] = [:]
+            var cpuOf: [pid_t: Double] = [:]
+            for e in entries {
+                childrenOf[e.ppid, default: []].append(e.pid)
+                cpuOf[e.pid] = e.cpu
+            }
+
+            // Sum CPU for a process tree rooted at `root`
+            func treeCpu(_ root: pid_t) -> Double {
+                var total = cpuOf[root] ?? 0
+                for child in childrenOf[root] ?? [] {
+                    total += treeCpu(child)
+                }
+                return total
+            }
+
+            // Calculate per-server CPU
+            var results: [String: Double] = [:]
+            for (pid, serverId) in pidToServerId {
+                results[serverId] = treeCpu(pid)
+            }
+
+            // App CPU (just this process, not its children which are the servers)
+            let selfCpu = cpuOf[appPid] ?? 0
+
+            DispatchQueue.main.async {
+                for (serverId, cpu) in results {
+                    self.serverStates[serverId]?.cpuUsage = cpu
+                }
+                // Zero out stopped servers
+                for (_, state) in self.serverStates where state.status != .running {
+                    state.cpuUsage = 0
+                }
+                self.appCpuUsage = selfCpu
+                self.objectWillChange.send()
+            }
+        }
+    }
+
+    private func sampleAppCpu() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let appPid = ProcessInfo.processInfo.processIdentifier
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/ps")
+            task.arguments = ["-p", "\(appPid)", "-o", "%cpu"]
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = FileHandle.nullDevice
+
+            do {
+                try task.run()
+                task.waitUntilExit()
+            } catch { return }
+
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            guard let output = String(data: data, encoding: .utf8) else { return }
+
+            let lines = output.components(separatedBy: "\n").dropFirst()
+            if let line = lines.first, let cpu = Double(line.trimmingCharacters(in: .whitespaces)) {
+                DispatchQueue.main.async {
+                    self?.appCpuUsage = cpu
+                }
+            }
         }
     }
 
@@ -300,7 +434,8 @@ class ServerManager: ObservableObject {
             status: state.status.rawValue,
             isHealthy: state.isHealthy,
             port: state.server.port,
-            lastError: state.lastError
+            lastError: state.lastError,
+            cpuUsage: state.status == .running ? state.cpuUsage : nil
         )
     }
 

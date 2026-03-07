@@ -361,6 +361,17 @@ struct LogView: View {
 
                 Spacer()
 
+                if serverState.status == .running {
+                    let cpu = serverState.cpuUsage
+                    HStack(spacing: 3) {
+                        Image(systemName: "cpu")
+                            .font(.system(size: 10))
+                        Text(cpu < 10 ? String(format: "%.1f%%", cpu) : String(format: "%.0f%%", cpu))
+                            .font(.system(size: 11, design: .monospaced))
+                    }
+                    .foregroundColor(cpu > 100 ? .red : cpu > 50 ? .orange : .secondary)
+                }
+
                 if let port = serverState.server.port {
                     Text("Port " + String(port))
                         .font(.system(size: 11))
