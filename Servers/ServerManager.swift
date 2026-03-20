@@ -15,22 +15,64 @@ class ServerManager: ObservableObject {
 
     private var healthCheckTimers: [String: Timer] = [:]
     private var cpuMonitorTimer: Timer?
-    private var nodeEnvPath: String {
-        // Check NVM default location
+    private func nodeEnvPath(for projectPath: String) -> String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let nvmDir = "\(home)/.nvm/versions/node"
-        if let versions = try? FileManager.default.contentsOfDirectory(atPath: nvmDir),
-           let latest = versions.filter({ $0.hasPrefix("v") }).sorted().last {
-            return "\(nvmDir)/\(latest)/bin"
+
+        guard let versions = try? FileManager.default.contentsOfDirectory(atPath: nvmDir),
+              !versions.isEmpty else {
+            // No NVM — try Homebrew (Apple Silicon and Intel)
+            for path in ["/opt/homebrew/bin", "/usr/local/bin"] {
+                if FileManager.default.fileExists(atPath: "\(path)/node") {
+                    return path
+                }
+            }
+            return "/usr/local/bin:/usr/bin"
         }
-        // Homebrew node (Apple Silicon and Intel)
-        for path in ["/opt/homebrew/bin", "/usr/local/bin"] {
-            if FileManager.default.fileExists(atPath: "\(path)/node") {
-                return path
+
+        let nodeVersions = versions.filter { $0.hasPrefix("v") }
+
+        // Try to match package.json engines.node
+        if let wanted = readEngineNode(from: projectPath),
+           nodeVersions.contains(wanted) {
+            return "\(nvmDir)/\(wanted)/bin"
+        }
+
+        // Try .nvmrc
+        if let nvmrc = try? String(contentsOfFile: "\(projectPath)/.nvmrc", encoding: .utf8) {
+            let version = nvmrc.trimmingCharacters(in: .whitespacesAndNewlines)
+            let prefixed = version.hasPrefix("v") ? version : "v\(version)"
+            if nodeVersions.contains(prefixed) {
+                return "\(nvmDir)/\(prefixed)/bin"
             }
         }
-        // Fall back to standard system paths
+
+        // Fall back to latest installed version (semver sort)
+        let sorted = nodeVersions.sorted { a, b in
+            let partsA = a.dropFirst().split(separator: ".").compactMap { Int($0) }
+            let partsB = b.dropFirst().split(separator: ".").compactMap { Int($0) }
+            for i in 0..<min(partsA.count, partsB.count) {
+                if partsA[i] != partsB[i] { return partsA[i] < partsB[i] }
+            }
+            return partsA.count < partsB.count
+        }
+        if let latest = sorted.last {
+            return "\(nvmDir)/\(latest)/bin"
+        }
+
         return "/usr/local/bin:/usr/bin"
+    }
+
+    private func readEngineNode(from projectPath: String) -> String? {
+        let packageJsonPath = "\(projectPath)/package.json"
+        guard let data = FileManager.default.contents(atPath: packageJsonPath),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let engines = json["engines"] as? [String: String],
+              let node = engines["node"] else {
+            return nil
+        }
+        // Ensure it has the "v" prefix
+        return node.hasPrefix("v") ? node : "v\(node)"
     }
 
     init() {
@@ -233,8 +275,10 @@ class ServerManager: ObservableObject {
 
         // Kill anything still holding the target port
         if let port = state.server.port {
-            killProcessesOnPort(port)
-            state.appendLog("[system] Cleared port \(port)")
+            let killed = killProcessesOnPort(port)
+            if !killed.isEmpty {
+                state.appendLog("[system] Killed \(killed.count) process(es) holding port \(port): PIDs \(killed.map { String($0) }.joined(separator: ", "))")
+            }
         }
 
         // Remove stale lock files for Next.js
@@ -246,11 +290,12 @@ class ServerManager: ObservableObject {
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
 
         // Build command with proper PATH
-        let fullCommand = "export PATH=\(nodeEnvPath):$PATH && exec \(state.server.command)"
+        let nodePath = nodeEnvPath(for: state.server.expandedPath)
+        let fullCommand = "export PATH=\(nodePath):$PATH && exec \(state.server.command)"
         process.arguments = ["-c", fullCommand]
 
         var env = ProcessInfo.processInfo.environment
-        env["PATH"] = "\(nodeEnvPath):" + (env["PATH"] ?? "")
+        env["PATH"] = "\(nodePath):" + (env["PATH"] ?? "")
         env["FORCE_COLOR"] = "1"  // Keep colors in output
         process.environment = env
 
@@ -394,7 +439,8 @@ class ServerManager: ObservableObject {
         Thread.sleep(forTimeInterval: 1.0)
     }
 
-    private func killProcessesOnPort(_ port: Int) {
+    @discardableResult
+    private func killProcessesOnPort(_ port: Int) -> [Int32] {
         // Get PIDs using lsof synchronously
         let pipe = Pipe()
         let task = Process()
@@ -416,10 +462,12 @@ class ServerManager: ObservableObject {
                 for pid in pids {
                     kill(pid, SIGKILL)
                 }
+                return pids
             }
         } catch {
             // Ignore errors - no process on port is fine
         }
+        return []
     }
 
     // MARK: - Log Access
