@@ -231,6 +231,12 @@ class ServerManager: ObservableObject {
         // Kill any orphaned processes
         killExistingProcesses(for: state.server)
 
+        // Kill anything still holding the target port
+        if let port = state.server.port {
+            killProcessesOnPort(port)
+            state.appendLog("[system] Cleared port \(port)")
+        }
+
         // Remove stale lock files for Next.js
         let lockPath = state.server.expandedPath + "/.next/dev/lock"
         try? FileManager.default.removeItem(atPath: lockPath)
