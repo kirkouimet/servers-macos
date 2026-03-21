@@ -267,6 +267,7 @@ class ServerManager: ObservableObject {
             return
         }
 
+        state.stoppingIntentionally = false
         state.status = .starting
         state.lastError = nil
 
@@ -318,7 +319,10 @@ class ServerManager: ObservableObject {
                 let exitCode = proc.terminationStatus
                 state.appendLog("[system] Process exited with code \(exitCode)")
 
-                if exitCode != 0 {
+                if state.stoppingIntentionally {
+                    state.stoppingIntentionally = false
+                    state.status = .stopped
+                } else if exitCode != 0 {
                     state.status = .crashed
                     state.lastError = "Exit code: \(exitCode)"
                     self.handleCrash(state: state)
@@ -351,6 +355,9 @@ class ServerManager: ObservableObject {
         guard let state = serverStates[serverId] else { return }
 
         stopHealthCheck(for: state)
+
+        // Mark as intentional so terminationHandler doesn't treat it as a crash
+        state.stoppingIntentionally = true
 
         // Cancel cooldown
         state.inCooldown = false

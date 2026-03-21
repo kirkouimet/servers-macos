@@ -75,6 +75,7 @@ class ServerState: ObservableObject {
     let crashWindowSeconds: TimeInterval = 60
     let cooldownSeconds: TimeInterval = 300
     var inCooldown = false
+    var stoppingIntentionally = false
 
     init(server: Server) {
         self.server = server
