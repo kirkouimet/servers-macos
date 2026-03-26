@@ -356,7 +356,7 @@ struct ServerControlButtons: View {
             }
 
             if let onOpenBrowser = onOpenBrowser {
-                ActionButton(icon: "safari", color: .cyan, enabled: status == .running, size: size, tooltip: "Open in Browser") {
+                ActionButton(icon: "safari", color: .cyan, enabled: true, size: size, tooltip: "Open in Browser") {
                     onOpenBrowser()
                 }
             }
