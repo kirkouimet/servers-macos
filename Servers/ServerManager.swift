@@ -267,6 +267,13 @@ class ServerManager: ObservableObject {
             return
         }
 
+        // Clear cooldown if manually started during cooldown window
+        if state.inCooldown {
+            state.inCooldown = false
+            state.crashTimes.removeAll()
+            state.appendLog("[system] Cooldown cleared - manual start")
+        }
+
         state.stoppingIntentionally = false
         state.status = .starting
         state.lastError = nil
@@ -550,12 +557,15 @@ class ServerManager: ObservableObject {
     }
 
     private func killExistingProcesses(for server: Server) {
-        // Extract the main command (first word) for pkill
-        let mainCommand = server.command.components(separatedBy: " ").first ?? server.command
+        // Use full command with word boundary to avoid killing sibling servers sharing the same path
+        // e.g. "pnpm structure dev" must not match "pnpm structure dev land"
+        let escapedCommand = NSRegularExpression.escapedPattern(for: server.command)
+        let escapedPath = NSRegularExpression.escapedPattern(for: server.expandedPath)
+        let pattern = "\(escapedPath).*\(escapedCommand)(\\s|$)"
 
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        task.arguments = ["-9", "-f", "\(server.expandedPath).*\(mainCommand)"]
+        task.arguments = ["-9", "-f", pattern]
         task.standardOutput = FileHandle.nullDevice
         task.standardError = FileHandle.nullDevice
 
@@ -582,6 +592,8 @@ class ServerManager: ObservableObject {
 
             DispatchQueue.main.asyncAfter(deadline: .now() + state.cooldownSeconds) { [weak self, weak state] in
                 guard let self = self, let state = state else { return }
+                // Skip if cooldown was already cleared by a manual start
+                guard state.inCooldown else { return }
                 state.inCooldown = false
                 state.crashTimes.removeAll()
                 state.appendLog("[system] Cooldown ended - restarting")
